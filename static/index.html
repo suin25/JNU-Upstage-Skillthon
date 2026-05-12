@@ -1,0 +1,868 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>영수증 가계부</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&display=swap');
+    * { font-family: 'Noto Sans KR', sans-serif; }
+
+    .upload-zone { transition: all 0.2s; }
+    .upload-zone.drag-over { background: #eff6ff; border-color: #3b82f6; }
+    .progress-bar { transition: width 0.5s ease; }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner { animation: spin 1s linear infinite; }
+
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    .fade-in { animation: fadeIn 0.3s ease; }
+
+    @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.5; } }
+    .pulse { animation: pulse 1.5s cubic-bezier(0.4,0,0.6,1) infinite; }
+
+    .report-body { font-size: 0.875rem; line-height: 1.75; color: #374151; }
+    .report-body strong { font-weight: 600; color: #1e1b4b; }
+    .report-body ol { list-style: decimal; padding-left: 1.25rem; margin: 0.75rem 0; }
+    .report-body ul { list-style: disc; padding-left: 1.25rem; margin: 0.5rem 0; }
+    .report-body li { margin: 0.25rem 0; }
+    .report-body p { margin: 0.5rem 0; }
+    .report-body h1,.report-body h2,.report-body h3 { font-weight: 600; margin: 0.75rem 0 0.25rem; }
+  </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+
+  <!-- API 키 설정 모달 -->
+  <div id="setupModal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl shadow-xl p-6 w-full max-w-md fade-in">
+      <div class="text-center mb-5">
+        <div class="text-4xl mb-2">🔑</div>
+        <h2 class="text-lg font-bold text-gray-800">Upstage API 키 설정</h2>
+        <p class="text-sm text-gray-500 mt-1">영수증 분석을 시작하려면 API 키가 필요합니다.</p>
+      </div>
+      <div class="space-y-3">
+        <input type="password" id="apiKeyInput" placeholder="up_xxxxxxxxxxxxxxxxxxxx"
+          class="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+        <button onclick="saveApiKey()"
+          class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2.5 rounded-xl transition-colors">
+          저장하기
+        </button>
+        <p class="text-xs text-center text-gray-400">
+          키 발급: <a href="https://console.upstage.ai" target="_blank" class="text-blue-500 hover:underline">console.upstage.ai</a>
+          → API Keys<br/>첫 가입 시 레퍼럴 코드 <strong>UPWAVE-KOH</strong> 입력 시 $70 크레딧 지급
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 헤더 -->
+  <header class="bg-white border-b border-gray-200 sticky top-0 z-10">
+    <div class="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <span class="text-2xl">🧾</span>
+        <h1 class="text-lg font-bold text-gray-800">영수증 가계부</h1>
+        <span class="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-medium">AI 자동 분석</span>
+      </div>
+      <div class="flex items-center gap-3">
+        <input type="month" id="monthPicker" min="1990-01"
+          class="text-sm border border-gray-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+        <button onclick="confirmReset()"
+          class="text-xs text-gray-400 hover:text-red-500 transition-colors">
+          초기화
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-5xl mx-auto px-4 py-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+    <!-- ── 왼쪽 패널 ── -->
+    <div class="space-y-5">
+
+      <!-- 입력 카드 (탭) -->
+      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+
+        <!-- 탭 -->
+        <div class="flex gap-1 bg-gray-100 rounded-xl p-1 mb-5">
+          <button id="tabPhoto" onclick="switchTab('photo')"
+            class="flex-1 text-sm font-medium py-1.5 rounded-lg transition-colors bg-white text-gray-800 shadow-sm">
+            📷 사진 업로드
+          </button>
+          <button id="tabManual" onclick="switchTab('manual')"
+            class="flex-1 text-sm font-medium py-1.5 rounded-lg transition-colors text-gray-500 hover:text-gray-700">
+            ✏️ 직접 입력
+          </button>
+        </div>
+
+        <!-- ── 사진 업로드 탭 ── -->
+        <div id="panelPhoto">
+          <div id="uploadZone"
+            class="upload-zone border-2 border-dashed border-gray-300 rounded-xl cursor-pointer hover:bg-gray-50"
+            onclick="document.getElementById('fileInput').click()"
+            ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
+
+            <div id="uploadDefault" class="p-8 text-center">
+              <div class="text-4xl mb-2">📷</div>
+              <p class="text-gray-600 font-medium">클릭하거나 이미지를 드래그하세요</p>
+              <p class="text-gray-400 text-sm mt-1">JPG, PNG · 여러 장 동시 선택 가능</p>
+            </div>
+
+            <div id="uploadPreview" class="hidden p-3">
+              <div id="thumbGrid" class="grid grid-cols-4 gap-2"></div>
+              <p id="previewCount" class="text-center text-xs text-gray-400 mt-2"></p>
+            </div>
+
+            <input type="file" id="fileInput" class="hidden" accept="image/*" multiple onchange="onFileSelect(event)" />
+          </div>
+
+          <div class="mt-4 flex items-center gap-2">
+            <label class="text-sm text-gray-600 whitespace-nowrap">월 수입</label>
+            <input type="number" id="incomeInput" value="3000000" step="100000" min="0"
+              class="flex-1 text-sm border border-gray-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <span class="text-sm text-gray-500">원</span>
+          </div>
+
+          <button id="uploadBtn" onclick="uploadReceipts()"
+            class="mt-4 w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2.5 rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled>
+            분석 시작
+          </button>
+        </div>
+
+        <!-- ── 직접 입력 탭 ── -->
+        <div id="panelManual" class="hidden space-y-3">
+          <div class="grid grid-cols-2 gap-3">
+            <div class="col-span-2">
+              <label class="text-xs font-medium text-gray-500 mb-1 block">가게명 *</label>
+              <input type="text" id="m_store" placeholder="스타벅스, 이마트 등"
+                class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div>
+              <label class="text-xs font-medium text-gray-500 mb-1 block">날짜 *</label>
+              <input type="date" id="m_date"
+                class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div>
+              <label class="text-xs font-medium text-gray-500 mb-1 block">결제 수단</label>
+              <select id="m_payment"
+                class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option>카드</option>
+                <option>현금</option>
+                <option>간편결제</option>
+                <option>알 수 없음</option>
+              </select>
+            </div>
+            <div>
+              <label class="text-xs font-medium text-gray-500 mb-1 block">카테고리 *</label>
+              <select id="m_category"
+                class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option>식비</option>
+                <option>카페/음료</option>
+                <option>교통</option>
+                <option>쇼핑/의류</option>
+                <option>생활용품</option>
+                <option>의료/건강</option>
+                <option>문화/여가</option>
+                <option>교육</option>
+                <option>구독서비스</option>
+                <option>기타</option>
+              </select>
+            </div>
+            <div>
+              <label class="text-xs font-medium text-gray-500 mb-1 block">금액 *</label>
+              <div class="flex items-center gap-1">
+                <input type="number" id="m_amount" placeholder="0" min="0" step="100"
+                  class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <span class="text-sm text-gray-500 whitespace-nowrap">원</span>
+              </div>
+            </div>
+          </div>
+
+          <button onclick="submitManualEntry()"
+            class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2.5 rounded-xl transition-colors">
+            추가하기
+          </button>
+        </div>
+
+      </div>
+
+      <!-- 처리 중 카드 -->
+      <div id="processingCard" class="hidden bg-blue-50 rounded-2xl border border-blue-200 p-5 fade-in">
+        <!-- 전체 진행률 -->
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-sm font-semibold text-blue-700">처리 중...</h2>
+          <span id="batchProgress" class="text-xs font-medium text-blue-600 bg-blue-100 px-2 py-0.5 rounded-full"></span>
+        </div>
+        <div class="mb-4">
+          <div class="h-1.5 bg-blue-200 rounded-full overflow-hidden">
+            <div id="batchProgressBar" class="h-1.5 bg-blue-500 rounded-full progress-bar" style="width:0%"></div>
+          </div>
+        </div>
+
+        <!-- 현재 파일명 -->
+        <p id="currentFileName" class="text-xs text-blue-600 mb-3 truncate"></p>
+
+        <!-- 파이프라인 단계 -->
+        <div class="space-y-2" id="stepList">
+          <div class="step flex items-center gap-2 text-sm text-gray-400" data-step="ocr">
+            <span class="step-icon w-5 h-5 flex-shrink-0">⬜</span>
+            <span>OCR — 이미지에서 텍스트 추출</span>
+          </div>
+          <div class="step flex items-center gap-2 text-sm text-gray-400" data-step="extract">
+            <span class="step-icon w-5 h-5 flex-shrink-0">⬜</span>
+            <span>Information Extract — 날짜·금액·품목 구조화</span>
+          </div>
+          <div class="step flex items-center gap-2 text-sm text-gray-400" data-step="category">
+            <span class="step-icon w-5 h-5 flex-shrink-0">⬜</span>
+            <span>Solar LLM — 카테고리 자동 분류</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 배치 결과 카드 -->
+      <div id="batchResultCard" class="hidden bg-white rounded-2xl shadow-sm border border-gray-100 p-5 fade-in">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wide">처리 결과</h2>
+          <span id="batchResultBadge" class="text-xs font-semibold px-2 py-0.5 rounded-full"></span>
+        </div>
+        <div id="batchResultList" class="space-y-3 max-h-64 overflow-y-auto"></div>
+      </div>
+
+      <!-- AI 재무 리포트 -->
+      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wide">AI 재무 리포트</h2>
+          <button id="reportBtn" onclick="generateReport()"
+            class="text-sm bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg transition-colors font-medium hidden">
+            생성
+          </button>
+          <span id="reportLocked" class="text-xs text-gray-400 hidden">매월 25일부터 생성 가능</span>
+        </div>
+        <div id="reportContent" class="max-h-72 overflow-y-auto">
+          <p class="text-gray-400 text-sm text-center py-4">Solar LLM이 이번 달 소비를 분석해<br/>맞춤형 재무 리포트를 작성해드립니다.</p>
+        </div>
+        <div id="reportLoading" class="hidden text-center py-4">
+          <svg class="spinner w-6 h-6 text-indigo-600 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+          </svg>
+          <p class="text-sm text-indigo-600 mt-2 pulse">Solar LLM 분석 중...</p>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ── 오른쪽 패널 ── -->
+    <div class="space-y-5">
+
+      <!-- 월별 소비 현황 -->
+      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wide">월별 소비 현황</h2>
+          <span id="totalSpentBadge" class="text-sm font-bold text-gray-700"></span>
+        </div>
+
+        <div class="flex gap-4 items-start">
+          <div class="relative w-28 h-28 flex-shrink-0">
+            <canvas id="donutChart"></canvas>
+            <div class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+              <span class="text-xs text-gray-400">총 지출</span>
+              <span id="chartTotal" class="text-xs font-bold text-gray-700"></span>
+            </div>
+          </div>
+          <div class="flex-1 min-w-0 space-y-2" id="categoryBars">
+            <p class="text-center text-gray-400 text-sm py-4">데이터가 없습니다</p>
+          </div>
+        </div>
+        <div id="paceAlerts" class="mt-3 space-y-1.5"></div>
+      </div>
+
+      <!-- 거래 내역 -->
+      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+        <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-4">이번 달 거래 내역</h2>
+        <div id="transactionList" class="max-h-72 overflow-y-auto">
+          <p class="text-gray-400 text-sm text-center py-4">거래 내역이 없습니다</p>
+        </div>
+      </div>
+
+    </div>
+  </main>
+
+  <script>
+    // ── 상태 ──────────────────────────────────────────────────────────────────
+    let selectedFiles    = [];  // File[]
+    let donutChart       = null;
+    let processedResults = [];  // 누적 처리 결과
+
+    const CATEGORY_COLORS = {
+      '식비':        '#ef4444',
+      '카페/음료':   '#f97316',
+      '교통':        '#eab308',
+      '쇼핑/의류':   '#84cc16',
+      '생활용품':    '#22c55e',
+      '의료/건강':   '#06b6d4',
+      '문화/여가':   '#6366f1',
+      '교육':        '#a855f7',
+      '구독서비스':  '#ec4899',
+      '기타':        '#94a3b8',
+    };
+
+    // ── 탭 전환 ───────────────────────────────────────────────────────────────
+    function switchTab(tab) {
+      const isPhoto = tab === 'photo';
+      document.getElementById('panelPhoto').classList.toggle('hidden', !isPhoto);
+      document.getElementById('panelManual').classList.toggle('hidden', isPhoto);
+
+      const activeClass  = 'bg-white text-gray-800 shadow-sm';
+      const inactiveClass = 'text-gray-500 hover:text-gray-700';
+
+      document.getElementById('tabPhoto').className =
+        `flex-1 text-sm font-medium py-1.5 rounded-lg transition-colors ${isPhoto ? activeClass : inactiveClass}`;
+      document.getElementById('tabManual').className =
+        `flex-1 text-sm font-medium py-1.5 rounded-lg transition-colors ${!isPhoto ? activeClass : inactiveClass}`;
+    }
+
+    // ── 초기화 ────────────────────────────────────────────────────────────────
+    (async function init() {
+      const today = new Date();
+      const m = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}`;
+      document.getElementById('monthPicker').value = m;
+      document.getElementById('monthPicker').addEventListener('change', () => {
+        refreshSummary();
+        refreshTransactions();
+      });
+
+      // 날짜 기본값: 오늘
+      document.getElementById('m_date').value = new Date().toISOString().slice(0, 10);
+
+      // 매월 25일 이후에만 AI 리포트 생성 버튼 노출
+      const lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+      if (today.getDate() >= 25 && today.getDate() <= lastDay) {
+        document.getElementById('reportBtn').classList.remove('hidden');
+      } else {
+        document.getElementById('reportLocked').classList.remove('hidden');
+      }
+
+      const status = await fetch('/api/status').then(r => r.json()).catch(() => ({ api_key_set: false }));
+      if (!status.api_key_set) {
+        document.getElementById('setupModal').classList.remove('hidden');
+      }
+
+      refreshSummary();
+      refreshTransactions();
+    })();
+
+    async function saveApiKey() {
+      const key = document.getElementById('apiKeyInput').value.trim();
+      if (!key) { alert('API 키를 입력하세요.'); return; }
+      const res = await fetch('/api/setup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_key: key }),
+      });
+      if (res.ok) document.getElementById('setupModal').classList.add('hidden');
+      else alert('저장 실패. 다시 시도해 주세요.');
+    }
+
+    function currentMonth() {
+      return document.getElementById('monthPicker').value;
+    }
+
+    // ── 파일 선택 ─────────────────────────────────────────────────────────────
+    function onFileSelect(event) {
+      setFiles(Array.from(event.target.files));
+    }
+
+    function onDragOver(event) {
+      event.preventDefault();
+      document.getElementById('uploadZone').classList.add('drag-over');
+    }
+
+    function onDragLeave() {
+      document.getElementById('uploadZone').classList.remove('drag-over');
+    }
+
+    function onDrop(event) {
+      event.preventDefault();
+      document.getElementById('uploadZone').classList.remove('drag-over');
+      const files = Array.from(event.dataTransfer.files).filter(f => f.type.startsWith('image/'));
+      if (files.length) setFiles(files);
+    }
+
+    function setFiles(files) {
+      selectedFiles = files;
+
+      document.getElementById('uploadDefault').classList.add('hidden');
+      document.getElementById('uploadPreview').classList.remove('hidden');
+
+      // 썸네일 그리드 (최대 8개 표시)
+      const grid = document.getElementById('thumbGrid');
+      const SHOW_MAX = 8;
+      const shown = files.slice(0, SHOW_MAX);
+      grid.innerHTML = shown.map((file, i) => {
+        const url = URL.createObjectURL(file);
+        const isLast = i === SHOW_MAX - 1 && files.length > SHOW_MAX;
+        return `
+          <div class="relative aspect-square rounded-lg overflow-hidden bg-gray-100">
+            <img src="${url}" class="w-full h-full object-cover" />
+            ${isLast ? `<div class="absolute inset-0 bg-black/50 flex items-center justify-center text-white text-sm font-bold">+${files.length - SHOW_MAX + 1}</div>` : ''}
+          </div>
+        `;
+      }).join('');
+
+      document.getElementById('previewCount').textContent =
+        files.length === 1 ? `${files[0].name}` : `${files.length}장 선택됨`;
+
+      const btn = document.getElementById('uploadBtn');
+      btn.disabled = false;
+      btn.textContent = files.length === 1 ? '분석 시작' : `${files.length}장 분석 시작`;
+    }
+
+    // ── 수동 입력 제출 ────────────────────────────────────────────────────────
+    async function submitManualEntry() {
+      const store    = document.getElementById('m_store').value.trim();
+      const date     = document.getElementById('m_date').value;
+      const category = document.getElementById('m_category').value;
+      const amount   = parseFloat(document.getElementById('m_amount').value);
+      const payment  = document.getElementById('m_payment').value;
+
+      if (!store)       { alert('가게명을 입력하세요.'); return; }
+      if (!amount || amount <= 0) { alert('금액을 입력하세요.'); return; }
+
+      const btn = document.querySelector('#panelManual button');
+      btn.disabled = true;
+      btn.textContent = '저장 중...';
+
+      try {
+        const res  = await fetch('/api/entry', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ store_name: store, date, category, total_amount: amount, payment_method: payment }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || '저장 실패');
+
+        // 폼 초기화
+        document.getElementById('m_store').value  = '';
+        document.getElementById('m_amount').value = '';
+        document.getElementById('m_date').value   = new Date().toISOString().slice(0, 10);
+
+        // 결과 표시 (단건이므로 배치 결과 카드 재활용)
+        showBatchResults([{ file: { name: store }, success: true, data }]);
+        await refreshSummary();
+        await refreshTransactions();
+
+      } catch (err) {
+        alert('오류: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '추가하기';
+      }
+    }
+
+    // ── 배치 업로드 & 분석 ───────────────────────────────────────────────────
+    async function uploadReceipts() {
+      if (!selectedFiles.length) return;
+
+      const btn = document.getElementById('uploadBtn');
+      btn.disabled = true;
+
+      document.getElementById('batchResultCard').classList.add('hidden');
+      showProcessingCard(true);
+
+      const total   = selectedFiles.length;
+      const results = [];  // { file, success, data?, error? }
+
+      for (let i = 0; i < total; i++) {
+        const file = selectedFiles[i];
+
+        // 진행률 업데이트
+        updateBatchProgress(i, total, file.name);
+        resetSteps();
+        setStep('ocr', 'active');
+
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('income', parseInt(document.getElementById('incomeInput').value) || 3000000);
+
+        try {
+          await delay(300);
+          setStep('ocr', 'done');
+          setStep('extract', 'active');
+          await delay(400);
+          setStep('extract', 'done');
+          setStep('category', 'active');
+
+          const res  = await fetch('/api/receipt', { method: 'POST', body: formData });
+          const data = await res.json();
+
+          if (!res.ok) throw new Error(data.detail || '서버 오류');
+
+          setStep('category', 'done');
+          await delay(150);
+          results.push({ file, success: true, data });
+
+        } catch (err) {
+          setStep('category', 'done');
+          results.push({ file, success: false, error: err.message });
+        }
+      }
+
+      // 완료
+      updateBatchProgress(total, total, '');
+      await delay(300);
+      showProcessingCard(false);
+      showBatchResults(results);
+      await refreshSummary();
+      await refreshTransactions();
+
+      btn.disabled  = false;
+      btn.textContent = selectedFiles.length === 1 ? '분석 시작' : `${selectedFiles.length}장 분석 시작`;
+    }
+
+    // ── 처리 중 카드 ──────────────────────────────────────────────────────────
+    function showProcessingCard(show) {
+      document.getElementById('processingCard').classList.toggle('hidden', !show);
+    }
+
+    function updateBatchProgress(done, total, filename) {
+      const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+      document.getElementById('batchProgress').textContent = `${done} / ${total}`;
+      document.getElementById('batchProgressBar').style.width = `${pct}%`;
+      document.getElementById('currentFileName').textContent = filename ? `📄 ${filename}` : '';
+    }
+
+    function resetSteps() {
+      document.querySelectorAll('[data-step]').forEach(el => {
+        el.querySelector('.step-icon').textContent = '⬜';
+        el.className = 'step flex items-center gap-2 text-sm text-gray-400';
+      });
+    }
+
+    function setStep(stepName, state) {
+      const el = document.querySelector(`[data-step="${stepName}"]`);
+      if (!el) return;
+      const icon = el.querySelector('.step-icon');
+      if (state === 'active') {
+        icon.innerHTML = `<svg class="spinner w-4 h-4 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>`;
+        el.className = 'step flex items-center gap-2 text-sm text-gray-700';
+      } else if (state === 'done') {
+        icon.textContent = '✅';
+        el.className = 'step flex items-center gap-2 text-sm text-gray-600';
+      }
+    }
+
+    // ── 배치 결과 표시 ────────────────────────────────────────────────────────
+    function showBatchResults(results) {
+      // 새 결과를 앞에 추가 (최신순)
+      processedResults = [...results, ...processedResults];
+      renderBatchResults();
+    }
+
+    function renderBatchResults() {
+      const results = processedResults;
+      const ok   = results.filter(r => r.success).length;
+      const fail = results.length - ok;
+
+      const badge = document.getElementById('batchResultBadge');
+      badge.textContent = `${ok}장 완료${fail ? ` · ${fail}장 실패` : ''}`;
+      badge.className   = fail > 0
+        ? 'text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700'
+        : 'text-xs font-semibold px-2 py-0.5 rounded-full bg-green-100 text-green-700';
+
+      const list = document.getElementById('batchResultList');
+      list.innerHTML = results.map(r => {
+        if (!r.success) {
+          return `
+            <div class="flex items-start gap-3 p-3 bg-red-50 rounded-xl border border-red-100">
+              <span class="text-base mt-0.5">❌</span>
+              <div class="min-w-0">
+                <p class="text-sm font-medium text-red-700 truncate">${escapeHtml(r.file.name)}</p>
+                <p class="text-xs text-red-500 mt-0.5">${escapeHtml(r.error)}</p>
+              </div>
+            </div>
+          `;
+        }
+
+        const { receipt, alert, pace_alerts, anomaly } = r.data;
+        const catColor = CATEGORY_COLORS[receipt.category] || '#94a3b8';
+        const alertHtml = alert ? `
+          <div class="mt-1.5 text-xs px-2 py-1 rounded-lg ${alert.includes('🚨') ? 'bg-red-100 text-red-600' : 'bg-amber-100 text-amber-600'}">
+            ${escapeHtml(alert)}
+          </div>` : '';
+        const paceHtml = (pace_alerts && pace_alerts.length) ? pace_alerts.map(pa => `
+          <div class="mt-1.5 text-xs px-2 py-1 rounded-lg bg-blue-50 text-blue-700">
+            ${escapeHtml(pa)}
+          </div>`).join('') : '';
+        const anomalyHtml = anomaly ? `
+          <div class="mt-1.5 text-xs px-2 py-1 rounded-lg bg-purple-50 text-purple-700">
+            ${escapeHtml(anomaly)}
+          </div>` : '';
+
+        return `
+          <div class="flex items-start gap-3 p-3 bg-gray-50 rounded-xl border border-gray-100">
+            <span class="text-base mt-0.5">✅</span>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center justify-between gap-2">
+                <p class="text-sm font-semibold text-gray-800 truncate">${escapeHtml(receipt.store_name || '알 수 없음')}</p>
+                <p class="text-sm font-bold text-blue-600 whitespace-nowrap">${(receipt.total_amount || 0).toLocaleString()}원</p>
+              </div>
+              <div class="flex items-center gap-2 mt-1">
+                <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium" style="background:${catColor}22;color:${catColor}">
+                  ${escapeHtml(receipt.category || '기타')}
+                </span>
+                <span class="text-xs text-gray-400">${receipt.date || '-'}</span>
+                ${(receipt.ocr_confidence || 1) < 0.7 ? `<span class="text-xs text-amber-500">⚠️ 저화질</span>` : ''}
+              </div>
+              ${alertHtml}${paceHtml}${anomalyHtml}
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      document.getElementById('batchResultCard').classList.remove('hidden');
+    }
+
+    // ── 월별 집계 ─────────────────────────────────────────────────────────────
+    async function refreshSummary() {
+      const month = currentMonth();
+      const res   = await fetch(`/api/summary?month=${month}`);
+      const data  = await res.json();
+
+      document.getElementById('totalSpentBadge').textContent =
+        data.total_spent > 0 ? `${data.total_spent.toLocaleString()}원` : '';
+
+      renderDonut(data);
+      renderCategoryBars(data);
+      renderPaceAlerts(data.pace_alerts || []);
+    }
+
+    function renderPaceAlerts(alerts) {
+      const container = document.getElementById('paceAlerts');
+      if (!alerts.length) { container.innerHTML = ''; return; }
+      container.innerHTML = alerts.map(a => `
+        <div class="text-xs px-3 py-2 rounded-lg bg-blue-50 text-blue-700 border border-blue-100 fade-in">
+          ${escapeHtml(a)}
+        </div>
+      `).join('');
+    }
+
+    function renderDonut(data) {
+      const cats   = Object.keys(data.by_category || {});
+      const values = cats.map(c => data.by_category[c].spent);
+      const colors = cats.map(c => CATEGORY_COLORS[c] || '#94a3b8');
+      const ctx    = document.getElementById('donutChart').getContext('2d');
+
+      if (donutChart) donutChart.destroy();
+
+      if (cats.length === 0) {
+        donutChart = null;
+        document.getElementById('chartTotal').textContent = '';
+        return;
+      }
+
+      donutChart = new Chart(ctx, {
+        type: 'doughnut',
+        data: { labels: cats, datasets: [{ data: values, backgroundColor: colors, borderWidth: 2, borderColor: '#fff' }] },
+        options: {
+          cutout: '72%',
+          plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: { label: c => ` ${c.label}: ${c.raw.toLocaleString()}원` } }
+          },
+          animation: { animateRotate: true }
+        }
+      });
+      document.getElementById('chartTotal').textContent = `${data.total_spent.toLocaleString()}원`;
+    }
+
+    function renderCategoryBars(data) {
+      const container = document.getElementById('categoryBars');
+      const cats = Object.entries(data.by_category || {});
+      if (cats.length === 0) {
+        container.innerHTML = '<p class="text-center text-gray-400 text-sm py-4">데이터가 없습니다</p>';
+        return;
+      }
+
+      container.innerHTML = cats.map(([cat, info]) => {
+        const ratio    = info.ratio !== null ? Math.min(info.ratio, 1) : null;
+        const pct      = ratio !== null ? Math.round(ratio * 100) : null;
+        const color    = CATEGORY_COLORS[cat] || '#94a3b8';
+        const barColor = (ratio || 0) >= 1 ? '#ef4444' : (ratio || 0) >= 0.8 ? '#f97316' : color;
+        const icon     = (ratio || 0) >= 1 ? '🚨' : (ratio || 0) >= 0.8 ? '⚠️' : '';
+
+        return `
+          <div>
+            <div class="flex justify-between items-center mb-1">
+              <span class="text-sm text-gray-700">${icon} ${cat}</span>
+              <span class="text-xs text-gray-500">${info.spent.toLocaleString()}원 ${info.limit ? `/ ${info.limit.toLocaleString()}원` : ''}</span>
+            </div>
+            <div class="h-2 bg-gray-100 rounded-full overflow-hidden">
+              <div class="h-2 rounded-full progress-bar" style="width:${pct !== null ? pct : 100}%; background:${barColor}"></div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // ── 거래 내역 ─────────────────────────────────────────────────────────────
+    const openCategories = new Set();
+
+    async function refreshTransactions() {
+      const month = currentMonth();
+      const res   = await fetch(`/api/transactions?month=${month}`);
+      const data  = await res.json();
+      const list  = document.getElementById('transactionList');
+
+      if (!data.transactions.length) {
+        list.innerHTML = '<p class="text-gray-400 text-sm text-center py-4">거래 내역이 없습니다</p>';
+        return;
+      }
+
+      // 카테고리별 그룹핑 (지출 합계 내림차순)
+      const groups = {};
+      for (const t of data.transactions) {
+        const cat = t.category || '기타';
+        if (!groups[cat]) groups[cat] = { total: 0, items: [] };
+        groups[cat].total += t.total_amount || 0;
+        groups[cat].items.push(t);
+      }
+      const sorted = Object.entries(groups).sort((a, b) => b[1].total - a[1].total);
+
+      list.innerHTML = sorted.map(([cat, group]) => {
+        const color   = CATEGORY_COLORS[cat] || '#94a3b8';
+        const isOpen  = openCategories.has(cat);
+        const txItems = [...group.items]
+          .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+          .map(t => {
+            const deleteBtn = t.id
+              ? `<button onclick="deleteTransaction('${t.id}')"
+                   class="p-1 text-gray-300 hover:text-red-400 transition-colors flex-shrink-0" title="삭제">
+                   <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                   </svg>
+                 </button>`
+              : '';
+            return `
+              <div class="flex items-center justify-between py-2 border-b border-gray-50 last:border-0 pl-4">
+                <div class="min-w-0">
+                  <p class="text-sm font-medium text-gray-800 truncate">${escapeHtml(t.store_name || '알 수 없음')}</p>
+                  <p class="text-xs text-gray-400">${t.date || '-'}</p>
+                </div>
+                <div class="flex items-center gap-1 flex-shrink-0 ml-2">
+                  <span class="text-sm font-semibold text-gray-700">${(t.total_amount || 0).toLocaleString()}원</span>
+                  ${deleteBtn}
+                </div>
+              </div>`;
+          }).join('');
+
+        return `
+          <div class="border border-gray-100 rounded-xl overflow-hidden">
+            <button onclick="toggleCategory('${cat}')"
+              class="w-full flex items-center justify-between px-3 py-2.5 hover:bg-gray-50 transition-colors">
+              <div class="flex items-center gap-2">
+                <div class="w-2.5 h-2.5 rounded-full flex-shrink-0" style="background:${color}"></div>
+                <span class="text-sm font-medium text-gray-700">${cat}</span>
+                <span class="text-xs text-gray-400">${group.items.length}건</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="text-sm font-semibold text-gray-800">${group.total.toLocaleString()}원</span>
+                <svg class="w-4 h-4 text-gray-400 transition-transform ${isOpen ? 'rotate-180' : ''}" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                </svg>
+              </div>
+            </button>
+            <div class="${isOpen ? '' : 'hidden'}" id="cat-${cat}">
+              ${txItems}
+            </div>
+          </div>`;
+      }).join('');
+    }
+
+    function toggleCategory(cat) {
+      if (openCategories.has(cat)) {
+        openCategories.delete(cat);
+      } else {
+        openCategories.add(cat);
+      }
+      refreshTransactions();
+    }
+
+    // ── 거래 삭제 ─────────────────────────────────────────────────────────────
+    async function deleteTransaction(id) {
+      if (!confirm('이 거래를 삭제하시겠습니까?')) return;
+      const res = await fetch(`/api/transactions/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        processedResults = processedResults.filter(r => r.success && r.data?.receipt?.id !== id);
+        if (processedResults.length === 0) {
+          document.getElementById('batchResultCard').classList.add('hidden');
+        } else {
+          renderBatchResults();
+        }
+        await refreshSummary();
+        await refreshTransactions();
+      } else {
+        alert('삭제 실패. 다시 시도해 주세요.');
+      }
+    }
+
+    // ── AI 리포트 ─────────────────────────────────────────────────────────────
+    async function generateReport() {
+      const month  = currentMonth();
+      const income = parseInt(document.getElementById('incomeInput').value) || 3000000;
+
+      document.getElementById('reportContent').classList.add('hidden');
+      document.getElementById('reportLoading').classList.remove('hidden');
+
+      try {
+        const res  = await fetch('/api/report', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ month, income }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || '리포트 생성 실패');
+
+        const content = document.getElementById('reportContent');
+        content.classList.remove('hidden');
+        content.innerHTML = `
+          <div class="report-body bg-indigo-50 rounded-xl p-4 border border-indigo-100 fade-in">
+            ${marked.parse(data.report)}
+          </div>
+        `;
+      } catch (err) {
+        document.getElementById('reportContent').classList.remove('hidden');
+        document.getElementById('reportContent').innerHTML =
+          `<p class="text-red-500 text-sm text-center py-2">${escapeHtml(err.message)}</p>`;
+      } finally {
+        document.getElementById('reportLoading').classList.add('hidden');
+      }
+    }
+
+    // ── 데이터 초기화 ─────────────────────────────────────────────────────────
+    async function confirmReset() {
+      if (!confirm('모든 거래 데이터를 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.')) return;
+      await fetch('/api/reset', { method: 'DELETE' });
+      processedResults = [];
+      document.getElementById('batchResultCard').classList.add('hidden');
+      await refreshSummary();
+      await refreshTransactions();
+      document.getElementById('reportContent').innerHTML =
+        '<p class="text-gray-400 text-sm text-center py-4">Solar LLM이 이번 달 소비를 분석해<br/>맞춤형 재무 리포트를 작성해드립니다.</p>';
+    }
+
+    // ── 유틸 ──────────────────────────────────────────────────────────────────
+    function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+    function escapeHtml(str) {
+      return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+  </script>
+</body>
+</html>
