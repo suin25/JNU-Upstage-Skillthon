@@ -21,7 +21,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent / "scripts"))
 
 from ocr_extract import process_image
 from analyze import check_budget_alert, summarize_month, generate_report, check_pace_alert, check_anomaly
@@ -239,6 +239,7 @@ def setup_api_key(req: ApiKeyRequest):
     import ocr_extract, analyze
     ocr_extract.UPSTAGE_API_KEY = req.api_key
     ocr_extract.client = config.client
+    ocr_extract.ie_client = openai.OpenAI(api_key=req.api_key, base_url="https://api.upstage.ai/v1/information-extraction")
     return {"message": "API 키가 저장되었습니다."}
 
 

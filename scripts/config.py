@@ -13,8 +13,8 @@ from openai import OpenAI
 
 # ── 경로 설정 ──────────────────────────────────────────────────────────────────
 
-ROOT_DIR  = Path(__file__).parent                 # skillthon/
-ASSET_DIR = ROOT_DIR
+ROOT_DIR  = Path(__file__).parent.parent          # skillthon/
+ASSET_DIR = ROOT_DIR / "assets"
 DATA_FILE = ROOT_DIR / "ledger_data.json"         # 영수증 누적 데이터 저장소
 
 # ── API 키 로드 ────────────────────────────────────────────────────────────────

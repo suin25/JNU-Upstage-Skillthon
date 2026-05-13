@@ -11,10 +11,17 @@ ocr_extract.py — 영수증 이미지에서 텍스트 추출 및 필드 구조�
 """
 
 import json
+import base64
 import argparse
 import requests
 from datetime import datetime
+from openai import OpenAI
 from config import UPSTAGE_API_KEY, client, CATEGORIES, load_data, save_data
+
+ie_client = OpenAI(
+    api_key=UPSTAGE_API_KEY or "placeholder",
+    base_url="https://api.upstage.ai/v1/information-extraction"
+)
 
 # ── Information Extract 스키마 ─────────────────────────────────────────────────
 # 영수증에서 뽑아낼 필드를 명시적으로 정의한다.
@@ -94,17 +101,24 @@ def ocr_receipt(image_path: str) -> tuple[str, float]:
 
 # ── Step 2: Information Extract ────────────────────────────────────────────────
 
-def extract_fields(ocr_text: str) -> dict:
+def extract_fields(image_path: str) -> dict:
     """
-    Upstage Information Extract로 OCR 텍스트를 구조화된 영수증 JSON으로 변환한다.
+    Upstage Information Extract로 영수증 이미지를 구조화된 JSON으로 변환한다.
 
     날짜 누락 → 오늘 날짜 자동 대입
     총액 누락 → 품목 단가 × 수량 합산으로 보정
     """
     print("  🔍 필드 추출 중 (Information Extract)...")
-    response = client.chat.completions.create(
+    with open(image_path, "rb") as f:
+        ext = image_path.rsplit(".", 1)[-1].lower()
+        mime = "image/jpeg" if ext in ("jpg", "jpeg") else "image/png"
+        b64 = base64.b64encode(f.read()).decode()
+
+    response = ie_client.chat.completions.create(
         model="information-extract",
-        messages=[{"role": "user", "content": ocr_text}],
+        messages=[{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
+        ]}],
         response_format={
             "type": "json_schema",
             "json_schema": {
@@ -172,9 +186,9 @@ def process_image(image_path: str) -> dict:
 
     if confidence < 0.7:
         print(f"  ⚠️  OCR 신뢰도 낮음 ({confidence:.0%}) — 결과가 부정확할 수 있습니다.")
-        print("     → references/edge_cases.md 의 '저품질 이미지' 섹션 참고")
+        print("     → ../references/edge_cases.md 의 '저품질 이미지' 섹션 참고")
 
-    receipt = extract_fields(text)
+    receipt = extract_fields(image_path)
     receipt["category"] = classify_category(receipt)
     receipt["ocr_confidence"] = round(confidence, 3)
 
